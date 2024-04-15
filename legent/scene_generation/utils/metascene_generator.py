@@ -7,6 +7,7 @@ from legent_related import complete_scene, take_photo
 from constants import FLOOR_MATERIAL, WALL_MATERIAL, WALL_HEIGHT, WALL_WIDTH
 import numpy as np
 import re
+import os
 
 
 ####### Helper functions ########

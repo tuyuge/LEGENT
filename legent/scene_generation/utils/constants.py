@@ -3,7 +3,7 @@ import pandas as pd
 
 FLOOR_HEIGHT = 0.1
 WALL_HEIGHT = 2.5
-WALL_WIDTH = 0.1
+WALL_WIDTH = 0.2
 
 
 FLOOR_MATERIAL = [
