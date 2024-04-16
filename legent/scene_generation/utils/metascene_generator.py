@@ -330,6 +330,20 @@ class ObjectGenerator:
         position_xy = object_to_surface_pos[0:3:2]
         return position_xy, object_position
     
+def wall_postprocess(walls):
+    """
+    Remove walls that are duplicated
+    """
+    unique_vertices = []
+    for wall in walls:
+        wall_vertices = []
+        if wall["position"] not in unique_vertices:
+            unique_vertices.append(wall["position"])
+        else:
+            if "holes" not in wall:
+                wall["holes"] = []
+            
+    return walls
 
 if __name__ == "__main__":
     object_plans = load_json("legent/scene_generation/utils/metascene.json")
