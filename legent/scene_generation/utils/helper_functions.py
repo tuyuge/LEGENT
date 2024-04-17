@@ -6,24 +6,27 @@ import objaverse
 import numpy as np
 from shapely.geometry import Polygon
 from shapely.affinity import rotate
-from legent import load_json, Environment, ResetInfo, SaveTopDownView, Observation
+from legent import load_json, store_json, Environment, ResetInfo, SaveTopDownView, Observation
 from legent.utils.config import ENV_FOLDER
 objaverse._VERSIONED_PATH = f"{ENV_FOLDER}/objaverse"
 
 ######## legent related ########
-def take_photo(scene_path, photo_path):
+def take_photo(scene_path, generator, room_plans, folder):
     """
     Take a photo of the scene and save it to the abosulte path!
     """
     env = Environment(env_path="auto", camera_resolution=1024, camera_field_of_view=120)
 
     try:
-        obs = env.reset(ResetInfo(scene=load_json(scene_path), api_calls=[SaveTopDownView(absolute_path=photo_path)]))
+        scene = generator(room_plans)
+        store_json(scene, f"{folder}/scene.json")
+        photo_path = f"{folder}/photo.png"
+        obs = env.reset(ResetInfo(scene, api_calls=[SaveTopDownView(absolute_path=photo_path)]))
         print("Scene saved successfully: ", photo_path)
     finally:
         env.close()
 
-def play_with_scene(scene_path):
+def play_with_scene(scene_path, generator, room_plans, scene_folder):
     """
     Take a photo of the scene and save it to the abosulte path!
     """
@@ -31,6 +34,10 @@ def play_with_scene(scene_path):
     try:
         obs: Observation = env.reset(ResetInfo(scene=load_json(scene_path)))
         while True:
+            if obs.text == "#RESET":
+                scene = generator(room_plans)
+                env.reset(ResetInfo(scene))
+                store_json(scene, f"{scene_folder}/scene.json")
             obs = env.step()
     finally:
         env.close()
@@ -40,6 +47,15 @@ def complete_scene(predefined_scene):
     Complete a predefined scene by adding player, agent, interactable information etc.
     """
     # Helper function to get the center of the scene
+    def get_center(predefined_scene):
+        bboxes = [floor["bbox"] for floor in predefined_scene["floors"] if "bbox" in floor]
+        x_min = min(bbox[0] for bbox in bboxes)
+        x_max = max(bbox[1] for bbox in bboxes)
+        z_min = min(bbox[2] for bbox in bboxes)
+        z_max = max(bbox[3] for bbox in bboxes)
+        center = [(x_min + x_max) / 2, (z_min + z_max) / 2]
+        return [center[0], (x_max-x_min+z_max-z_min)*2, center[1]]
+
 
     position = [100, 0.1, 100] 
     rotation = [0, random.randint(0, 360), 0]
@@ -70,7 +86,7 @@ def complete_scene(predefined_scene):
         "instances": predefined_scene["instances"] if "instances" in predefined_scene else [],
         "player": predefined_scene["player"] if "player" in predefined_scene else player,
         "agent": predefined_scene["agent"] if "agent" in predefined_scene else agent,
-        "center": predefined_scene["center"] if "center" in predefined_scene else [4,10,2],
+        "center": predefined_scene["center"] if "center" in predefined_scene else get_center(predefined_scene),
     }
     return infos
         
@@ -83,14 +99,14 @@ class PolygonConverter:
     bbox: [xmin, ymin, xmax, ymax]
     surfaces: {"xz": [x_min, z_min, x_max, z_max], "y": y, direction: direction}
     """
-    def __init__(self):
-        pass
+    def __init__(self, wall_width=0):
+        self.wall_width = wall_width
     
     # get surface before placing the object
     def get_surfaces(self, instance):
         for surface in instance["surfaces"]:
             if "direction" not in surface:
-                if instance["category"].lower() in ["wall", "window", "door"]:
+                if instance["category"] in ["wall", "window", "door"]:
                     surface["direction"] = [-90, 0, 0]
                 else:
                     surface["direction"] = [0, 0, 0]
@@ -121,6 +137,8 @@ class PolygonConverter:
     def instance_to_surface(self, surface, instance):
         size = instance["size"]
         size = PolygonConverter().rotate_3D(size, surface["direction"])
+        if instance["category"] in ["floor", "ceiling"]:
+            size = [abs(size[0])-self.wall_width, abs(size[1]), abs(size[2])-self.wall_width]
         size = [abs(size[0]), abs(size[1]), abs(size[2])]
         vertices = self.get_rectangle_relative_vertices([0, 0], size[0:3:2])
         polygon = self.vertcies_to_polygon(vertices, 0)
@@ -216,11 +234,16 @@ class InstanceGenerator:
         try:
             if prefab:
                 asset = next(item for item in self.assets[category] if item['name'] == prefab)
+                
             else:
                 asset = random.choice(self.assets[category])
             asset["prefab"] = self._set_prefab(asset['name'])
-            if 'size' in asset:
+
+            try:
                 asset['size'] = [asset['size'][dim] for dim in ('x', 'y', 'z')]
+            except:
+                print("Wrong: ", asset)
+            
             instance.update(asset)
            
         except (KeyError, StopIteration):

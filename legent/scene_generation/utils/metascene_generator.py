@@ -112,7 +112,7 @@ class ObjectGenerator:
                         
                         for i in range(10): # try 10 times
                             object["position_xy"], object["position"] = self._get_object_pos(receptacle, object, surface, rotation)
-                            object["bbox"] = PolygonConverter().get_bbox(object["position"], object["size"])
+                            object["bbox"] = PolygonConverter(WALL_WIDTH).get_bbox(object["position"], object["size"])
                             object["scale"] = [1, 1, 1]
 
                             # if category in wall, door, window, directly place them without checking collision
@@ -140,7 +140,7 @@ class ObjectGenerator:
         if "category" not in receptacle:
             receptacle["category"] = self.instance_generator._get_category(receptacle["prefab"])
             
-        receptacle = PolygonConverter().get_surfaces(receptacle)
+        receptacle = PolygonConverter(WALL_WIDTH).get_surfaces(receptacle)
         return receptacle
     
     def _get_object_pos(self, receptacle, object, surface, rotation):
@@ -196,9 +196,10 @@ class ObjectGenerator:
         return x, y, z
     
 class SceneGenerator():
-    def __init__(self):
+    def __init__(self, add_ceiling=False):
         self.layout_generator = LayoutGenerator()
         self.object_generator = ObjectGenerator(InstanceGenerator())
+        self.add_ceiling = add_ceiling
 
     def _place_objects(self, receptacles):
         new_receptacles = []
@@ -209,15 +210,17 @@ class SceneGenerator():
 
     def generate_scene(self, room_plans):
         floors, walls, ceilings = self.layout_generator.generate_layout(room_plans)
-        floors_ceilings = self._place_objects(floors + ceilings)
+        if self.add_ceiling:
+            floors = floors + ceilings
+        floors = self._place_objects(floors)
         walls = self._place_objects(walls)
         final_instances = self.object_generator.final_instances
         scene = {
-            'floors': floors_ceilings,
-            'walls': walls,
-            'instances': [obj for obj in final_instances if obj['category'] not in ['agent', 'player']],
-            'agent': next((obj for obj in final_instances if obj['category'] == 'agent'), None),
-            'player': next((obj for obj in final_instances if obj['category'] == 'player'), None)
+            'floors': [self.clean_keys(item) for item in floors],
+            'walls': [self.clean_keys(item) for item in walls],
+            'instances': [self.clean_keys(obj) for obj in final_instances if obj['category'] not in ['agent', 'player']],
+            'agent': next((self.clean_keys(obj) for obj in final_instances if obj['category'] == 'agent'), None),
+            'player': next((self.clean_keys(obj) for obj in final_instances if obj['category'] == 'player'), None)
         }
         scene = complete_scene(scene)
         return scene
@@ -226,23 +229,21 @@ class SceneGenerator():
         """
         Remain only the keys that are needed in the final scene
         """
-        if item["cateogy"] in ["floor", "wall"]:
-            return {
-                "position": item["position"],
-                "size": item["size"],
-                "rotation": item["rotation"],
-                "material": item["material"],
-                "category": item["category"]
-            }
+        if item["category"] in ["floor", "ceiling", "wall"]:
+            keys = ["position", "size", "rotation", "material", "holes", "bbox"]
+        else:
+            keys = ["prefab", "position", "rotation", "scale"]
+        item = {k: item[k] for k in keys if k in item}
+        return item
         
 if __name__ == "__main__":
     scene_folder = f"{os.getcwd()}/legent/scenes"
     room_plans = load_json(f"{scene_folder}/metascene.json")
-    scene_generator = SceneGenerator()
-    scene = scene_generator.generate_scene(room_plans)
-    store_json(scene, f"{scene_folder}/scene.json")
 
-    take_photo(f"{scene_folder}/scene.json", f"{scene_folder}/photo.png")
-    play_with_scene(f"{scene_folder}/scene.json")
+    # # take a photo of the scene
+    take_photo(f"{scene_folder}/scene.json", SceneGenerator().generate_scene, room_plans, scene_folder)
+
+    # play with the scene
+    # play_with_scene(f"{scene_folder}/scene.json", SceneGenerator().generate_scene, room_plans, scene_folder)
 
    
