@@ -1,5 +1,6 @@
 from legent import load_json, store_json
 import pandas as pd
+from helper_functions import InstanceGenerator
 
 FLOOR_HEIGHT = 0.1
 WALL_HEIGHT = 2.5
@@ -97,17 +98,128 @@ def get_edge_middle_prefabs():
     store_json(EDGE_PREFABS, "data/prefabs.json")
     store_json(MIDDLE_PREFABS, "data/middle_prefabs.json")
 
+
+def process_assets(original_path, save_path):
+    original_assets = load_json(original_path)
+    save_assets = []
+    for key, value in original_assets.items():
+        annotations = value["annotations"]
+        try:
+            type = value["objectMetadata"]["type"]
+        except KeyError:
+            type = None
+
+        try:
+            name = value["objectMetadata"]["name"]
+        except KeyError:
+            name = None
+        size = value["objectMetadata"]["axisAlignedBoundingBox"]["size"]
+
+        description= annotations["description"] if annotations["description"] else annotations["description_auto"]
+        
+        try:
+            
+            save_assets.append({
+                "uid": annotations["uid"],
+                "name": name,
+                "category": annotations["category"],
+                "size": size,
+                "type": type,
+                "description": description,
+                "onFloor": annotations["onFloor"],
+                "onObject": annotations["onObject"],
+                "onWall": annotations["onWall"],
+                "onCeiling": annotations["onCeiling"]
+            })
+        except KeyError as e:
+            print("Wrong due to ", e)
+            print(f"{annotations['uid']}")
+
+
+    store_json(save_assets, save_path)
+
+def object_category_to_names(asset_path, types_to_names_path):
+    object_dict = {}
+    for asset in load_json(asset_path):
+        object_type = asset["category"]
+        object_name = asset["uid"]
+        if object_type in object_dict:
+            object_dict[object_type].append(object_name)
+        else:
+            object_dict[object_type] = [object_name]
+    store_json(object_dict, types_to_names_path)
+
+
+def object_category_to_names_normal(all_assets, types_to_names_path):
+    object_dict = {}
+    for asset in all_assets:
+        object_name = asset["name"]
+        object_type = InstanceGenerator.get_category(object_name)
+        if object_type in object_dict:
+            object_dict[object_type].append(object_name)
+        else:
+            object_dict[object_type] = [object_name]
+    store_json(object_dict, types_to_names_path)
+
+
 if __name__ == "__main__":
-    all_assets = load_json("data/addressables.json")
-    type_to_names = load_json("data/object_type_to_names.json")
+    # process assets
+    asset_path = "legent/scene_generation/data/addressables.json"
+    types_to_names_path = "legent/scene_generation/data/object_type_to_names.json"
+    all_assets = load_json(asset_path)["prefabs"]
+    
+    object_category_to_names_normal(all_assets, types_to_names_path)
+    type_to_names = load_json(types_to_names_path)
+
     final_dict = {}
     for type, names in type_to_names.items():
         for name in names:
-            for prefab in all_assets['prefabs']:
+            for prefab in all_assets:
                 if prefab['name'] == name:
                     if type not in final_dict:
                         final_dict[type] = []
-                    else:
-                        final_dict[type].append(prefab)
+                    final_dict[type].append(prefab)
     
-    store_json(final_dict, "data/prefabs.json")
+    final_dict.update({
+        "agent":[
+            {
+                "name":"agent",
+                "size": {
+                    "x": 0.5,
+                    "y": 1.8,
+                    "z": 0.5
+                }
+            }
+        ],
+        "player":[
+            {
+                "name": "player",
+                "size": {
+                    "x": 0.5,
+                    "y": 1.8,
+                    "z": 0.5
+                }
+            }
+        ],
+    })
+    store_json(final_dict, "legent/scene_generation/data/prefabs.json")
+
+    # # process objaverse assets
+    # original_path = ""
+    # asset_path = "legent/scene_generation/data/objaverse_addresables.json"
+    # # process_assets(original_path, asset_path)
+    # types_to_names_path = "legent/scene_generation/data/objaverse_object_type_to_names.json"
+    # object_category_to_names(asset_path, types_to_names_path)
+    
+    # all_assets = load_json(asset_path)
+    # type_to_names = load_json(types_to_names_path)
+    # final_dict = {}
+    # for type, names in type_to_names.items():
+    #     for name in names:
+    #         for prefab in all_assets:
+    #             if prefab['name'] == name:
+    #                 if type not in final_dict:
+    #                     final_dict[type] = []
+    #                 final_dict[type].append(prefab)
+    
+    # store_json(final_dict, "legent/scene_generation/data/objaverse_prefabs.json")
