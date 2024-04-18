@@ -108,6 +108,8 @@ class PolygonConverter:
             if "direction" not in surface:
                 if instance["category"] in ["wall", "window", "door"]:
                     surface["direction"] = [90, 0, 0]
+                elif instance["category"] == "ceiling":
+                    surface["direction"] = [180, 0, 0]
                 else:
                     surface["direction"] = [0, 0, 0]
             if "xz" not in surface:
@@ -230,18 +232,23 @@ def get_object_pos(receptacle, surface, object, rotation):
         abs_size = [abs(dim) for dim in rotated_size]
         length, width, _ = PolygonConverter.bbox_dimensions(surface["xz"])
 
-        # Initialize x and z with default random positioning within bounds
         x = random.uniform(-length / 2 + abs_size[0] / 2, length / 2 - abs_size[0] / 2)
         z = random.uniform(-width / 2 + abs_size[2] / 2, width / 2 - abs_size[2] / 2)
         y = abs_size[1]/2
 
         # Override x and z if 'relative_pos' is available in instance
         if "position_xz" in instance:
-            position_xz = instance["position_xz"]
-            if position_xz[0] == "auto":
+            position_x, position_z = instance["position_xz"]
+            if position_x == "auto":
                 x = length / 2 - abs_size[0] / 2
-            if position_xz[1] == "auto":
+            # if position_x is float or int
+            elif isinstance(position_x, (int, float)):
+                x = position_x
+            if position_z == "auto":
                 z = width / 2 - abs_size[2] / 2
+            elif isinstance(position_z, (int, float)):
+                z = position_z
+                
         relative_pos = x, y, z
         size_xz = abs_size[0:3:2]
         return relative_pos, size_xz

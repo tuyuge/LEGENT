@@ -201,9 +201,9 @@ if __name__ == "__main__":
     # scene = SceneGenerator().generate_scene(room_plans)
 
     # # take a photo of the scene
-    take_photo(SceneGenerator().generate_scene, room_plans, scene_folder)
+    take_photo(SceneGenerator(add_ceiling=True).generate_scene, room_plans, scene_folder)
 
     # play with the scene
-    # play_with_scene(f"{scene_folder}/scene.json", SceneGenerator().generate_scene, room_plans, scene_folder)
+    play_with_scene(f"{scene_folder}/scene.json", SceneGenerator().generate_scene, room_plans, scene_folder)
 
    
