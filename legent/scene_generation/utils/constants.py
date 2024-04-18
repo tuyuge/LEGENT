@@ -2,10 +2,8 @@ from legent import load_json, store_json
 import pandas as pd
 from helper_functions import InstanceGenerator
 
-FLOOR_HEIGHT = 0.1
+FLOOR_HEIGHT = WALL_WIDTH = 0.2
 WALL_HEIGHT = 2.5
-WALL_WIDTH = 0.2
-
 
 FLOOR_MATERIAL = [
     'WorldMaterialsFree_HexBricks', 

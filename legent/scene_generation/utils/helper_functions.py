@@ -11,7 +11,7 @@ from legent.utils.config import ENV_FOLDER
 objaverse._VERSIONED_PATH = f"{ENV_FOLDER}/objaverse"
 
 ######## legent related ########
-def take_photo(scene_path, generator, room_plans, folder):
+def take_photo(generator, room_plans, folder):
     """
     Take a photo of the scene and save it to the abosulte path!
     """
@@ -28,7 +28,7 @@ def take_photo(scene_path, generator, room_plans, folder):
 
 def play_with_scene(scene_path, generator, room_plans, scene_folder):
     """
-    Take a photo of the scene and save it to the abosulte path!
+    Play with the scene
     """
     env = Environment(env_path="auto", camera_resolution=1024, camera_field_of_view=120)
     try:
@@ -95,8 +95,8 @@ class PolygonConverter:
     """
     instance: position, rotation, size
     polygon: Polygon object
-    vertices: [(x1, y1), (x2, y2), (x3, y3), (x4, y4), ...]
-    bbox: [xmin, ymin, xmax, ymax]
+    vertices: [(x1, z1), (x2, z2), (x3, z3), (x4, z4), ...]
+    bbox: [xmin, zmin, xmax, zmax]
     surfaces: {"xz": [x_min, z_min, x_max, z_max], "y": y, direction: direction}
     """
     def __init__(self, wall_width=0):
@@ -107,7 +107,7 @@ class PolygonConverter:
         for surface in instance["surfaces"]:
             if "direction" not in surface:
                 if instance["category"] in ["wall", "window", "door"]:
-                    surface["direction"] = [-90, 0, 0]
+                    surface["direction"] = [90, 0, 0]
                 else:
                     surface["direction"] = [0, 0, 0]
             if "xz" not in surface:
@@ -117,11 +117,11 @@ class PolygonConverter:
                     surface = self.instance_to_surface(surface, instance)
         return instance
     
-    def get_bbox(self, position, size):
+    def get_bbox(self, position_xz, size_xz):
         """
         Get the bounding box of an instance
         """
-        vertices = self.get_rectangle_relative_vertices(position[0:3:2], size[0:3:2])
+        vertices = self.get_rectangle_relative_vertices(position_xz, size_xz)
         polygon = self.vertcies_to_polygon(vertices, 0)
         return polygon.bounds
 
@@ -135,9 +135,8 @@ class PolygonConverter:
         return surface
 
     def instance_to_surface(self, surface, instance):
-        size = instance["size"]
-        size = PolygonConverter().rotate_3D(size, surface["direction"])
-        if instance["category"] in ["floor", "ceiling"]:
+        size = PolygonConverter().rotate_3D(instance["size"], surface["direction"])
+        if instance["category"] in ["floor", "ceiling", "wall"]:
             size = [abs(size[0])-self.wall_width, abs(size[1]), abs(size[2])-self.wall_width]
         size = [abs(size[0]), abs(size[1]), abs(size[2])]
         vertices = self.get_rectangle_relative_vertices([0, 0], size[0:3:2])
@@ -214,6 +213,55 @@ class PolygonConverter:
         rotated_point = np.dot(R, point)
         return rotated_point.tolist()
     
+
+
+        
+def get_object_pos(receptacle, surface, object, rotation):
+    """
+    Get the position of the object relative to the surface and the absolute position
+    """
+
+    def _get_position(instance, surface):   
+        """
+        Get the position of the object relative to the surface
+        """
+        # rotate the size according to the direction of the surface
+        rotated_size = PolygonConverter().rotate_3D(instance["size"], surface["direction"])   
+        abs_size = [abs(dim) for dim in rotated_size]
+        length, width, _ = PolygonConverter.bbox_dimensions(surface["xz"])
+
+        # Initialize x and z with default random positioning within bounds
+        x = random.uniform(-length / 2 + abs_size[0] / 2, length / 2 - abs_size[0] / 2)
+        z = random.uniform(-width / 2 + abs_size[2] / 2, width / 2 - abs_size[2] / 2)
+        y = abs_size[1]/2
+
+        # Override x and z if 'relative_pos' is available in instance
+        if "position_xz" in instance:
+            position_xz = instance["position_xz"]
+            if position_xz[0] == "auto":
+                x = length / 2 - abs_size[0] / 2
+            if position_xz[1] == "auto":
+                z = width / 2 - abs_size[2] / 2
+        relative_pos = x, y, z
+        size_xz = abs_size[0:3:2]
+        return relative_pos, size_xz
+    
+    # find the absolute position of a point relative to a cuboid that has been rotated
+    # get the position of the object relative to the surface
+    object_to_surface_pos, size_xz = _get_position(object, surface)
+    # get the position of the point relative to the center of the cuboid 
+    surface_to_receptacle_pos = [0,surface["y"],0]
+    object_to_receptacle_pos = [x+y for x, y in zip(object_to_surface_pos, surface_to_receptacle_pos)]
+    if object["category"] in ["door", "window"]:
+        object_to_receptacle_pos[1] = 0
+    # rotate the point using the given angles [angle_x, angle_y, angle_z]
+    rotated_object_to_receptacle_pos = PolygonConverter.rotate_3D(object_to_receptacle_pos, rotation)
+    # After applying the rotation, translate the rotated point back to its absolute position 
+    object_position = [m + n for m, n in zip(receptacle["position"], rotated_object_to_receptacle_pos)]
+    position_xz = object_to_surface_pos[0:3:2]
+    position_xz = [position_xz[0], -position_xz[1]]
+    return position_xz, size_xz, object_position
+
 
 class InstanceGenerator:
     def __init__(self, use_objaverse=False):
