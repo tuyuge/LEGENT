@@ -1,10 +1,11 @@
-from shapely.geometry import LineString, MultiLineString, Polygon
+from shapely.geometry import LineString, MultiLineString, Polygon, Point
 import matplotlib.pyplot as plt
 import random
 import re
 import objaverse
 import numpy as np
 from shapely.geometry import Polygon
+from shapely.geometry import box
 from shapely.affinity import rotate
 from legent import load_json, store_json, Environment, ResetInfo, SaveTopDownView, Observation
 from legent.utils.config import ENV_FOLDER
@@ -159,13 +160,26 @@ class PolygonConverter:
         return rotated_polygon
     
     @staticmethod
+    def rotate_bbox(bbox, angle):
+        """
+        Rotate a bounding box by a given angle
+        """
+        # Create a box from bounds
+        x_min, z_min, x_max, z_max = bbox
+        rect = box(x_min, z_min, x_max, z_max)
+        origin = rect.centroid.coords[0]
+        rotated_rect = rotate(rect, angle, origin=origin)
+        x_min, z_min, x_max, z_max = rotated_rect.bounds
+        return x_min, z_min, x_max, z_max
+    
+    @staticmethod
     def get_rectangle_relative_vertices(position, size):
         """
         Get the vertices of a rectangle given the position and size; note that x1, x2 can be x,z or x,y
         """
         x1, x2 = position
         length, width = size
-        x1_min, x1_max = x1 - length / 2, x2 + length / 2
+        x1_min, x1_max = x1 - length / 2, x1 + length / 2
         x2_min, x2_max = x2 - width / 2, x2 + width / 2
         return [(x1_min, x2_min), (x1_max, x2_min), (x1_max, x2_max), (x1_min, x2_max)]
 
@@ -214,8 +228,6 @@ class PolygonConverter:
         # Rotate the point
         rotated_point = np.dot(R, point)
         return rotated_point.tolist()
-    
-
 
         
 def get_object_pos(receptacle, surface, object, rotation):
@@ -223,50 +235,74 @@ def get_object_pos(receptacle, surface, object, rotation):
     Get the position of the object relative to the surface and the absolute position
     """
 
-    def _get_position(instance, surface):   
+    def _get_position(instance, receptacle, surface, rotation):   
         """
         Get the position of the object relative to the surface
         """
-        # rotate the size according to the direction of the surface
-        rotated_size = PolygonConverter().rotate_3D(instance["size"], surface["direction"])   
-        abs_size = [abs(dim) for dim in rotated_size]
-        length, width, _ = PolygonConverter.bbox_dimensions(surface["xz"])
+        
+        # get the size of the surface
+        x_min, z_min, x_max, z_max = surface["xz"]
+        # rotate the surface size, note that y axis is not affected
+        if receptacle["category"] == "floor":
+            x_min, z_min, x_max, z_max = PolygonConverter.rotate_bbox(surface["xz"], rotation[1])
+            abs_size = instance["size"]
+        else:
+            # rotate the instance size
+            rotated_size = PolygonConverter().rotate_3D(instance["size"], surface["direction"])
+            abs_size = [abs(dim) for dim in rotated_size]
 
-        x = random.uniform(-length / 2 + abs_size[0] / 2, length / 2 - abs_size[0] / 2)
-        z = random.uniform(-width / 2 + abs_size[2] / 2, width / 2 - abs_size[2] / 2)
+        x = random.uniform(x_min + abs_size[0] / 2, x_max - abs_size[0] / 2)
+        z = random.uniform(z_min + abs_size[2] / 2, z_max - abs_size[2] / 2)
         y = abs_size[1]/2
 
         # Override x and z if 'relative_pos' is available in instance
         if "position_xz" in instance:
-            position_x, position_z = instance["position_xz"]
-            if position_x == "auto":
-                x = length / 2 - abs_size[0] / 2
-            # if position_x is float or int
-            elif isinstance(position_x, (int, float)):
-                x = position_x
-            if position_z == "auto":
-                z = width / 2 - abs_size[2] / 2
-            elif isinstance(position_z, (int, float)):
-                z = position_z
-                
+            if receptacle["category"] != "floor":
+                position_x, position_z = instance["position_xz"]
+                if position_x == "auto":
+                    x = x_max - abs_size[0] / 2
+                # if position_x is float or int
+                elif isinstance(position_x, (int, float)):
+                    x = position_x
+                if position_z == "auto":
+                    z = z_max - abs_size[2] / 2
+                elif isinstance(position_z, (int, float)):
+                    z = position_z
+            else:
+                position_x, position_z = instance["position_xz"]
+                if position_x == "auto":
+                    x = x_min + abs_size[0] / 2
+                # if position_x is float or int
+                elif isinstance(position_x, (int, float)):
+                    x = position_x
+                if position_z == "auto":
+                    z = z_min + abs_size[2] / 2
+                elif isinstance(position_z, (int, float)):
+                    z = position_z
+
         relative_pos = x, y, z
         size_xz = abs_size[0:3:2]
         return relative_pos, size_xz
     
     # find the absolute position of a point relative to a cuboid that has been rotated
     # get the position of the object relative to the surface
-    object_to_surface_pos, size_xz = _get_position(object, surface)
+    if object["category"] == "bedtable":
+        pass
+    object_to_surface_pos, size_xz = _get_position(object, receptacle, surface, rotation)
     # get the position of the point relative to the center of the cuboid 
     surface_to_receptacle_pos = [0,surface["y"],0]
     object_to_receptacle_pos = [x+y for x, y in zip(object_to_surface_pos, surface_to_receptacle_pos)]
     if object["category"] in ["door", "window"]:
         object_to_receptacle_pos[1] = 0
     # rotate the point using the given angles [angle_x, angle_y, angle_z]
-    rotated_object_to_receptacle_pos = PolygonConverter.rotate_3D(object_to_receptacle_pos, rotation)
+    object_to_receptacle_pos = PolygonConverter.rotate_3D(object_to_receptacle_pos, rotation)
     # After applying the rotation, translate the rotated point back to its absolute position 
-    object_position = [m + n for m, n in zip(receptacle["position"], rotated_object_to_receptacle_pos)]
+    object_position = [m + n for m, n in zip(receptacle["position"], object_to_receptacle_pos)]
     position_xz = object_to_surface_pos[0:3:2]
-    position_xz = [position_xz[0], -position_xz[1]]
+    if receptacle["category"] != "floor":
+        position_xz = [position_xz[0], -position_xz[1]]
+    else:
+        position_xz = object_to_receptacle_pos[0:3:2]
     return position_xz, size_xz, object_position
 
 

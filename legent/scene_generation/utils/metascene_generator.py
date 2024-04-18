@@ -100,18 +100,25 @@ class ObjectGenerator:
             surface_rect = surface["xz"]
             rect_placer = RectPlacer(surface_rect)
             if "children" in surface:
-                for object in surface["children"]:                        
+                for object in surface["children"]:      
+                    # if "prefab" in object and object["prefab"] and "shadow" in object["prefab"]:
+                    #     bbox = PolygonConverter(WALL_WIDTH).get_bbox(object["position"][0:3:2], object["size"][0:3:2])
+                    #     rect_placer.place_rectangle(object["prefab"], bbox)
+                    #     continue
+                  
                     object = self.instance_generator.get_instance(object)
                     # only objects with size info will be placed
                     if "size" in object and object["size"]:
                         # set rotation as the receptacle rotation
-                        if "rotation" not in object:
+                        if "angle" not in object:
                             object["rotation"] = receptacle["rotation"]
+                        else:
+                            object["rotation"] = [0, object["angle"], 0]
 
                         # add scale
                         object["scale"] = [1, 1, 1]
                         # get the total rotation of the object
-                        rotation = [x+y for x, y in zip(surface["direction"], receptacle["rotation"])]
+                        rotation = [x+y for x, y in zip(surface["direction"], object["rotation"])]
                         
                         # if surface is not horizontal, the object is not affected by gravity
                         if surface["direction"] != [0, 20, 0]:
@@ -119,11 +126,11 @@ class ObjectGenerator:
                         
                         for i in range(10): # try 10 times
                             # relative position
-                            position_xz, size_xz, object["position"] = get_object_pos(receptacle, surface, object, rotation)
-                            receptacle = self._postprocess_receptacle(receptacle, object, position_xz, size_xz)
+                            object["position_xz"], size_xz, object["position"] = get_object_pos(receptacle, surface, object, rotation)
+                            receptacle = self._postprocess_receptacle(receptacle, object, object["position_xz"], size_xz)
 
-                            # check collision, use absolute position
-                            object["bbox"] = PolygonConverter(WALL_WIDTH).get_bbox(object["position"][0:3:2], object["size"][0:3:2])
+                            # check collision, use relative position
+                            object["bbox"] = PolygonConverter(WALL_WIDTH).get_bbox(object["position_xz"], size_xz)
                             if rect_placer.place_rectangle(object["prefab"], object["bbox"]):
                                 self.final_instances.append(object)
                                 break
@@ -154,11 +161,11 @@ class SceneGenerator():
         self.object_generator = ObjectGenerator(InstanceGenerator())
         self.add_ceiling = add_ceiling
 
-    def _place_objects(self, receptacles, add_objects=None):
+    def _place_objects(self, receptacles, shadows=None):
         new_receptacles = []
         for receptacle in receptacles:
-            if add_objects:
-                receptacle["surfaces"][0]["children"] = add_objects + receptacle["surfaces"][0]["children"]
+            if shadows:
+                receptacle["surfaces"][0]["children"] = shadows + receptacle["surfaces"][0]["children"]
             receptacle = self.object_generator.place_objects_recursively(receptacle)
             new_receptacles.append(receptacle)
         return new_receptacles
@@ -170,6 +177,8 @@ class SceneGenerator():
         
         # first place wall objects, then floor objects
         walls = self._place_objects(walls)
+        # wall_objects = self.object_generator.final_instances
+        # shadows = self._convert_to_shadow(wall_objects)
         floors = self._place_objects(floors)
         
         final_instances = self.object_generator.final_instances
@@ -190,9 +199,46 @@ class SceneGenerator():
         if item["category"] in ["floor", "ceiling", "wall"]:
             keys = ["position", "size", "rotation", "material", "holes", "bbox"]
         else:
-            keys = ["prefab", "category", "position", "rotation", "scale", "type", "size", "bbox"]
+            keys = ["prefab", "category", "position", "rotation", "scale", "type", "size", "bbox", "position_xz"]
         item = {k: item[k] for k in keys if k in item}
         return item
+    
+    # def _convert_to_shadow(self, wall_objects, door_shadow_length=0.5):
+    #     """
+    #     Add shadow to the object
+    #     """
+    #     shadow_objects = []
+    #     for obj in wall_objects:
+    #         obj["prefab"] = obj["prefab"]+"-shadow"
+    #         if obj["category"] == "door":
+    #             if obj["rotation"][1] in [0, 180]:
+    #                 # deep copy a dict
+    #                 door_shadow_1 = copy.deepcopy(obj)
+    #                 door_shadow_1["position"][2] = obj["position"][2] + WALL_WIDTH/2 + door_shadow_length/2
+    #                 door_shadow_1["size"][2] = door_shadow_length
+    #                 shadow_objects.append(door_shadow_1)
+
+    #                 door_shadow_2 = copy.deepcopy(obj)
+    #                 door_shadow_2["position"][2] = obj["position"][2] - WALL_WIDTH/2 - door_shadow_length/2
+    #                 door_shadow_2["size"][2] = door_shadow_length
+    #                 shadow_objects.append(door_shadow_2)
+                    
+    #             else:
+    #                 door_shadow_1 = copy.deepcopy(obj) 
+    #                 door_shadow_1["position"][0] = obj["position"][0] + WALL_WIDTH/2 + door_shadow_length/2
+    #                 size_x = door_shadow_1["size"][0]
+    #                 door_shadow_1["size"][0] = door_shadow_length
+    #                 door_shadow_1["size"][2] = size_x
+    #                 shadow_objects.append(door_shadow_1)
+
+    #                 door_shadow_2 = copy.deepcopy(obj)
+    #                 door_shadow_2["position"][0] = obj["position"][0] - WALL_WIDTH/2 - door_shadow_length/2
+    #                 size_x = door_shadow_2["size"][0]
+    #                 door_shadow_2["size"][0] = door_shadow_length
+    #                 door_shadow_2["size"][2] = size_x
+    #                 shadow_objects.append(door_shadow_2)
+    #     shadow_objects = [self.clean_keys(obj) for obj in shadow_objects]
+    #     return shadow_objects
 
         
 if __name__ == "__main__":
@@ -201,7 +247,7 @@ if __name__ == "__main__":
     # scene = SceneGenerator().generate_scene(room_plans)
 
     # # take a photo of the scene
-    take_photo(SceneGenerator(add_ceiling=True).generate_scene, room_plans, scene_folder)
+    # take_photo(SceneGenerator(add_ceiling=False).generate_scene, room_plans, scene_folder)
 
     # play with the scene
     play_with_scene(f"{scene_folder}/scene.json", SceneGenerator().generate_scene, room_plans, scene_folder)
