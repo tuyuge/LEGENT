@@ -1,7 +1,6 @@
 from legent.environment.env_utils import get_default_env_data_path
 from legent.scene_generation.objects import get_default_object_db
 from legent.server.rect_placer import RectPlacer
-from legent.utils.io import load_json, log, store_json, load_json_from_toolkit
 from legent.utils.math import look_rotation
 import numpy as np
 import json
@@ -15,7 +14,6 @@ from legent.scene_generation.room_spec import (
     RoomSpec,
     LeafRoom,
 )
-
 
 prefabs = None  # all the prefabs info, including name, size and center offset (for Unity transform position)
 interactable_names = []  # all the interactive object names, such as "Watermelon_01"
@@ -522,3 +520,23 @@ def complete_scene(predefined_scene):
     with open("last_scene.json", "w", encoding="utf-8") as f:
         json.dump(infos, f, ensure_ascii=False, indent=4)
     return infos
+
+######## legent related ########
+def take_photo(scene, folder):
+    """
+    Take a photo of the scene and save it to the abosulte path!
+    """
+    env = Environment(env_path="auto", camera_resolution=1024, camera_field_of_view=120)
+
+    try:
+        store_json(scene, f"{folder}/scene.json")
+        photo_path = f"{folder}/photo.png"
+        obs = env.reset(ResetInfo(scene, api_calls=[SaveTopDownView(absolute_path=photo_path)]))
+        print("Scene saved successfully: ", photo_path)
+    finally:
+        env.close()
+
+if __name__ == "__main__":
+    import os
+    scene = generate_scene(room_num=1)
+    take_photo(scene, os.getcwd())

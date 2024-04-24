@@ -5,24 +5,42 @@ import re
 import objaverse
 import numpy as np
 from shapely.geometry import Polygon
-from shapely.geometry import box
 from shapely.affinity import rotate
-from legent import load_json, store_json, Environment, ResetInfo, SaveTopDownView, Observation
+from legent import load_json, store_json, Environment, ResetInfo, SaveTopDownView, Observation, TakePhotoWithVisiblityInfo
+import trimesh
 from legent.utils.config import ENV_FOLDER
 objaverse._VERSIONED_PATH = f"{ENV_FOLDER}/objaverse"
+from legent.scene_generation.utils.mesh_processer import convert_holodeck_asset_to_gltf
+import os
 
 ######## legent related ########
-def take_photo(generator, room_plans, folder):
+def take_photo(generator, room_plans, folder, camera_width=4096, camera_field_of_view=120, vertical_field_of_view=90, photo_type="corner_view"):
     """
     Take a photo of the scene and save it to the abosulte path!
     """
-    env = Environment(env_path="auto", camera_resolution=1024, camera_field_of_view=120)
-
+    env = Environment(env_path="auto", camera_resolution=1024, camera_field_of_view=camera_field_of_view)
+    camera_height = int(camera_width / camera_field_of_view * vertical_field_of_view)
     try:
         scene = generator(room_plans)
         store_json(scene, f"{folder}/scene.json")
         photo_path = f"{folder}/photo.png"
-        obs = env.reset(ResetInfo(scene, api_calls=[SaveTopDownView(absolute_path=photo_path)]))
+        if photo_type == "topdown":
+            obs = env.reset(ResetInfo(scene, api_calls=[SaveTopDownView(absolute_path=photo_path)]))
+        elif photo_type == "corner_view":
+            position = scene["player"]["position"].copy()
+            # 人眼距离地面的高度
+            position[1] = 1.5
+            # 最好和实际数据分布尽可能一致，所以正着的要多一些
+            # 相机的角度范围一般是多少？这个角度范围还要根据具体位置计算下，计算方法是如果在外放块就往对角线看的，偏移一点原来的位置；如果在内方块就随机一个yrotation
+            rotation_chage_prob = 0
+            rotation_y = scene["player"]["rotation"][1]
+            if random.random() < rotation_chage_prob:
+                rotation = [0, rotation_y+random.uniform(30, -30),0]
+            else:
+                rotation = [random.uniform(0, 90), rotation_y, 0]
+            # move player away
+            scene["player"]["position"] = [100, 0.1, 100]
+            obs = env.reset(ResetInfo(scene, api_calls=[TakePhotoWithVisiblityInfo(photo_path, position, rotation, width=camera_width, height=camera_height, vertical_field_of_view=vertical_field_of_view)]))
         print("Scene saved successfully: ", photo_path)
     finally:
         env.close()
@@ -48,19 +66,19 @@ def complete_scene(predefined_scene):
     Complete a predefined scene by adding player, agent, interactable information etc.
     """
     # Helper function to get the center of the scene
-    def get_center(predefined_scene):
-        bboxes = [floor["bbox"] for floor in predefined_scene["floors"] if "bbox" in floor]
-        x_min = min(bbox[0] for bbox in bboxes)
-        x_max = max(bbox[1] for bbox in bboxes)
-        z_min = min(bbox[2] for bbox in bboxes)
-        z_max = max(bbox[3] for bbox in bboxes)
-        center = [(x_min + x_max) / 2, (z_min + z_max) / 2]
-        return [center[0], (x_max-x_min+z_max-z_min)*2, center[1]]
+    # def get_center(predefined_scene):
+    #     bboxes = [floor["bbox"] for floor in predefined_scene["floors"]]
+    #     x_min = min(bbox[0] for bbox in bboxes)
+    #     z_min = max(bbox[1] for bbox in bboxes)
+    #     x_max = min(bbox[2] for bbox in bboxes)
+    #     z_max = max(bbox[3] for bbox in bboxes)
+    #     center = [(x_min + x_max) / 2, (z_min + z_max) / 2]
+    #     return [center[0], (x_max-x_min+z_max-z_min), center[1]]
 
 
     position = [100, 0.1, 100] 
     rotation = [0, random.randint(0, 360), 0]
-    player = {
+    agent = {
         "prefab": "",
         "position": position,
         "rotation": rotation,
@@ -68,10 +86,13 @@ def complete_scene(predefined_scene):
         "parent": -1,
         "type": ""
     }
+    bbox = predefined_scene["floors"][0]["bbox"]
+    x_min, z_min, x_max, z_max = bbox
+    center = [(x_min + x_max) / 2,(x_max-x_min+z_max-z_min), (z_min + z_max) / 2]
 
-    position = [1.5, 0.1, 1.5]
-    rotation = [0, random.randint(0, 360), 0]
-    agent = {
+    position = [bbox[0]+0.3, 0.1, bbox[1]+0.3]
+    rotation = [0, 45, 0]
+    player = {
         "prefab": "",
         "position": position,
         "rotation": rotation,
@@ -85,13 +106,12 @@ def complete_scene(predefined_scene):
         "floors": predefined_scene["floors"] if "floors" in predefined_scene else [],
         "walls": predefined_scene["walls"] if "walls" in predefined_scene else [],
         "instances": predefined_scene["instances"] if "instances" in predefined_scene else [],
-        "player": predefined_scene["player"] if "player" in predefined_scene else player,
-        "agent": predefined_scene["agent"] if "agent" in predefined_scene else agent,
-        "center": predefined_scene["center"] if "center" in predefined_scene else get_center(predefined_scene),
+        "player": predefined_scene["player"] if "player" in predefined_scene and predefined_scene["player"] else player,
+        "agent": predefined_scene["agent"] if "agent" in predefined_scene and predefined_scene["agent"] else agent,
+        "center": predefined_scene["center"] if "center" in predefined_scene else center,
     }
     return infos
         
-
 class PolygonConverter:
     """
     instance: position, rotation, size
@@ -160,19 +180,6 @@ class PolygonConverter:
         return rotated_polygon
     
     @staticmethod
-    def rotate_bbox(bbox, angle):
-        """
-        Rotate a bounding box by a given angle
-        """
-        # Create a box from bounds
-        x_min, z_min, x_max, z_max = bbox
-        rect = box(x_min, z_min, x_max, z_max)
-        origin = rect.centroid.coords[0]
-        rotated_rect = rotate(rect, angle, origin=origin)
-        x_min, z_min, x_max, z_max = rotated_rect.bounds
-        return x_min, z_min, x_max, z_max
-    
-    @staticmethod
     def get_rectangle_relative_vertices(position, size):
         """
         Get the vertices of a rectangle given the position and size; note that x1, x2 can be x,z or x,y
@@ -229,87 +236,13 @@ class PolygonConverter:
         rotated_point = np.dot(R, point)
         return rotated_point.tolist()
 
-        
-def get_object_pos(receptacle, surface, object, rotation):
-    """
-    Get the position of the object relative to the surface and the absolute position
-    """
-
-    def _get_position(instance, receptacle, surface, rotation):   
-        """
-        Get the position of the object relative to the surface
-        """
-        
-        # get the size of the surface
-        x_min, z_min, x_max, z_max = surface["xz"]
-        # rotate the surface size, note that y axis is not affected
-        if receptacle["category"] == "floor":
-            x_min, z_min, x_max, z_max = PolygonConverter.rotate_bbox(surface["xz"], rotation[1])
-            abs_size = instance["size"]
-        else:
-            # rotate the instance size
-            rotated_size = PolygonConverter().rotate_3D(instance["size"], surface["direction"])
-            abs_size = [abs(dim) for dim in rotated_size]
-
-        x = random.uniform(x_min + abs_size[0] / 2, x_max - abs_size[0] / 2)
-        z = random.uniform(z_min + abs_size[2] / 2, z_max - abs_size[2] / 2)
-        y = abs_size[1]/2
-
-        # Override x and z if 'relative_pos' is available in instance
-        if "position_xz" in instance:
-            if receptacle["category"] != "floor":
-                position_x, position_z = instance["position_xz"]
-                if position_x == "auto":
-                    x = x_max - abs_size[0] / 2
-                # if position_x is float or int
-                elif isinstance(position_x, (int, float)):
-                    x = position_x
-                if position_z == "auto":
-                    z = z_max - abs_size[2] / 2
-                elif isinstance(position_z, (int, float)):
-                    z = position_z
-            else:
-                position_x, position_z = instance["position_xz"]
-                if position_x == "auto":
-                    x = x_min + abs_size[0] / 2
-                # if position_x is float or int
-                elif isinstance(position_x, (int, float)):
-                    x = position_x
-                if position_z == "auto":
-                    z = z_min + abs_size[2] / 2
-                elif isinstance(position_z, (int, float)):
-                    z = position_z
-
-        relative_pos = x, y, z
-        size_xz = abs_size[0:3:2]
-        return relative_pos, size_xz
-    
-    # find the absolute position of a point relative to a cuboid that has been rotated
-    # get the position of the object relative to the surface
-    if object["category"] == "bedtable":
-        pass
-    object_to_surface_pos, size_xz = _get_position(object, receptacle, surface, rotation)
-    # get the position of the point relative to the center of the cuboid 
-    surface_to_receptacle_pos = [0,surface["y"],0]
-    object_to_receptacle_pos = [x+y for x, y in zip(object_to_surface_pos, surface_to_receptacle_pos)]
-    if object["category"] in ["door", "window"]:
-        object_to_receptacle_pos[1] = 0
-    # rotate the point using the given angles [angle_x, angle_y, angle_z]
-    object_to_receptacle_pos = PolygonConverter.rotate_3D(object_to_receptacle_pos, rotation)
-    # After applying the rotation, translate the rotated point back to its absolute position 
-    object_position = [m + n for m, n in zip(receptacle["position"], object_to_receptacle_pos)]
-    position_xz = object_to_surface_pos[0:3:2]
-    if receptacle["category"] != "floor":
-        position_xz = [position_xz[0], -position_xz[1]]
-    else:
-        position_xz = object_to_receptacle_pos[0:3:2]
-    return position_xz, size_xz, object_position
-
-
 class InstanceGenerator:
-    def __init__(self, use_objaverse=False):
+    def __init__(self, use_objaverse=False, use_holodeck=False):
         self.use_objaverse = use_objaverse
-        self.assets = self._get_assets()
+        self.use_holodeck = use_holodeck
+        self.holodeck_data_path = "/Users/a0001/THUNLP/embodied_ai/Holodeck-main/data/objaverse_holodeck/09_23_combine_scale/processed_2023_09_23_combine_scale"
+        self.objaverse_assets = load_json("legent/scene_generation/data/objaverse_prefabs.json")
+        self.other_assets = load_json("legent/scene_generation/data/prefabs.json")
 
     def get_instance(self, instance):
         prefab = instance["prefab"] if "prefab" in instance else None
@@ -323,42 +256,55 @@ class InstanceGenerator:
         """
 
         try:
-            if prefab:
-                asset = next(item for item in self.assets[category] if item['name'] == prefab)
-                
+            if self.use_objaverse or self.use_holodeck:
+                if instance["category"] in ["door", "window"]:
+                    assets = self.other_assets
+                else:
+                    assets = self.objaverse_assets
             else:
-                asset = random.choice(self.assets[category])
-            asset["prefab"] = self._set_prefab(asset['name'])
+                assets = self.other_assets
+            if prefab:
+                asset = next(item for item in assets[category] if item['name'] == prefab)
+            else:
+                asset = random.choice(assets[category])
+            asset["prefab"] = self._set_prefab(asset['name'], instance["category"])
+            if not asset["prefab"]:
+                return asset
 
             try:
                 asset['size'] = [asset['size'][dim] for dim in ('x', 'y', 'z')]
             except:
-                print("Wrong: ", asset)
+                pass
             
             instance.update(asset)
            
         except (KeyError, StopIteration):
             pass
 
-        return instance
-    
-    def _get_assets(self):
-        # Load prefab data
-        if self.use_objaverse:
-            asset_path = "legent/scene_generation/data/objaverse_prefabs.json"
-        else:
-            asset_path = "legent/scene_generation/data/prefabs.json"
-        assets = load_json(asset_path)
-        return assets
-        
+        try:
+            instance["scale"] = self._get_scale(instance["prefab"], instance["size"])
+        except:
+            instance["scale"] = [1,1,1]
 
-    def _set_prefab(self, instance_name):
+        if self.use_objaverse:
+            instance["rotation"] = [-i for i in instance["rotation"]]
+        return instance        
+
+    def _set_prefab(self, instance_name, category):
         """
         Set prefab attribute for the instance
         """
         if instance_name not in ["agent", "player"]:
             if self.use_objaverse:
-                prefab = self._objaverse_object(instance_name)
+                if category in ["door", "window"]:
+                    prefab = instance_name
+                else:
+                    prefab = self._objaverse_object(instance_name)
+            elif self.use_holodeck:
+                if category in ["door", "window"]:
+                    prefab = instance_name
+                else:
+                    prefab = self._holodeck_object(instance_name)
             else:
                 prefab = instance_name
             return prefab
@@ -376,7 +322,24 @@ class InstanceGenerator:
     def _objaverse_object(self, uid):
         objects = objaverse.load_objects([uid])
         return list(objects.values())[0]
+    
+    def _holodeck_object(self, uid):
+        asset = None
+        convert_holodeck_asset_to_gltf(f"{self.holodeck_data_path}/{uid}", f".data/{uid}.gltf")
+        # Add Holodeck example
+        asset = os.path.abspath(f".data/{uid}.gltf")
+        return asset
+    
+    def _calculate_bounding_box_from_trimesh(self, file_path):
+        mesh = trimesh.load(file_path)
+        return mesh.bounds[0], mesh.bounds[1]
 
+    def _get_scale(self, file_path, size):
+        min_vals, max_vals = self._calculate_bounding_box_from_trimesh(file_path)
+        mesh_size = max_vals - min_vals
+        scale = size / mesh_size
+        scale = list(scale)
+        return scale
 
 class RectangleProcessor:
     def __init__(self):

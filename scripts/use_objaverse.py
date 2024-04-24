@@ -15,8 +15,10 @@ def objaverse_object(uid):
     return list(objects.values())[0]
 
 
-def objaverse_object_info(uid):
+def objaverse_object_info(uid, raw=False):
     annotation = objaverse.load_annotations([uid])[uid]
+    if raw:
+        return annotation
     info = {
         "uid": uid,
         "name": annotation["name"],
@@ -81,7 +83,29 @@ def try_objaverse_xl():  # NOT annotated. See https://huggingface.co/datasets/al
 # try_objaverse_lvis()
 # try_objaverse_xl()
 
-env = Environment(env_path="auto", camera_resolution=1024, camera_field_of_view=120)
+
+def calculate_bounding_box_from_trimesh(file_path):
+    mesh = trimesh.load(file_path)
+    return mesh.bounds[0], mesh.bounds[1]
+
+
+from legent import load_json
+
+uid2size = load_json("uid2size.json")
+
+
+def get_scale(uid, verbose=False):
+    file_path = objaverse_object(uid)
+    min_vals, max_vals = calculate_bounding_box_from_trimesh(file_path)
+    mesh_size = max_vals - min_vals
+    size = uid2size[uid]
+    scale = size / mesh_size
+    if verbose:
+        return mesh_size, size, scale
+    return scale
+
+
+env = Environment(env_path=None, camera_resolution=1024, camera_field_of_view=120)
 
 try:
 
@@ -95,7 +119,16 @@ try:
 
         # Use objects from objaverse
         # A slipper
-        scene["instances"].append({"prefab": objaverse_object("000074a334c541878360457c672b6c2e"), "position": [2, 0.1, 2], "rotation": [0, 0, 0], "scale": [1, 1, 1], "type": "interactable"})
+
+        # from objaverse
+        # 545ac531192944c0b97da2b7da0b636c
+
+        # from holodeck
+        # uid = "000a0c5cdc3146ea87485993fbaf5352"
+        uid = random.choice(list(uid2size.keys()))
+        scale = list(get_scale(uid))
+        size = uid2size[uid]
+        scene["instances"].append({"prefab": objaverse_object(uid), "position": [2, size[1] / 2, 2], "rotation": [0, 0, 0], "scale": scale, "type": "kinematic"})
         return scene
 
     obs: Observation = env.reset(ResetInfo(build_scene_with_custom_objects()))

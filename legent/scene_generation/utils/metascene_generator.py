@@ -1,14 +1,97 @@
 import os
 import random
 from legent.server.rect_placer import RectPlacer
-from legent import load_json
-from constants import FLOOR_MATERIAL, WALL_MATERIAL, WALL_HEIGHT, WALL_WIDTH, FLOOR_HEIGHT
-from helper_functions import RectangleProcessor, InstanceGenerator, PolygonConverter, complete_scene, take_photo, play_with_scene, get_object_pos
+from legent.scene_generation.utils.constants import FLOOR_MATERIAL, WALL_MATERIAL, WALL_HEIGHT, WALL_WIDTH, FLOOR_HEIGHT
+from legent.scene_generation.utils.helper_functions import RectangleProcessor, InstanceGenerator, PolygonConverter, complete_scene, take_photo, play_with_scene, load_json
 import copy
+
+class PositionGenerator:
+    def __init__(self):
+        pass
+
+    def _rotate_size(self, size, rotation):
+        size = PolygonConverter().rotate_3D(size, rotation)
+        return [abs(dim) for dim in size]
+    
+    def _rotate_bbox(self, bbox, rotation):
+        length, width, _ = PolygonConverter.bbox_dimensions(bbox)
+        new_surface_size = self._rotate_size([length,0,width], rotation)[0:3:2]
+        bbox = PolygonConverter().get_bbox([0,0], new_surface_size)
+        return bbox
+
+    def _get_auto_position(self, surface, size, instance):
+        x_min, z_min, x_max, z_max = surface
+        x = random.uniform(x_min + size[0]/2, x_max - size[0]/2)
+        z = random.uniform(z_min + size[2]/2, z_max - size[2]/2)
+        x_auto_min = x_min + size[0]/2
+        z_auto_min = z_min + size[2]/2
+        # place at left and bottom if auto
+        x, y, z = self._apply_instance_position(instance, x_auto_min, z_auto_min, [x, size[1]/2, z])
+        return x, y, z
+
+    def _apply_instance_position(self, instance, x_default, z_default, random_pos):
+        x, y, z = random_pos
+        if "position_xz" in instance:
+            position_x, position_z = instance["position_xz"]
+            if position_x == "auto":
+                x = x_default
+            elif isinstance(position_x, (int, float)):
+                x = position_x
+            if position_z == "auto":
+                z = z_default
+            elif isinstance(position_z, (int, float)):
+                z = position_z
+        return x, y, z
+    
+    def _get_position(self, instance, receptacle, surface):   
+        """
+        Get the position of the object relative to the surface
+        """
+        surface_bbox = surface["xz"]
+        if receptacle["category"] == "wall":
+            # rotate size according to surface direction
+            size = self._rotate_size(instance["size"], surface["direction"])
+            # get the relative pos
+            relative_pos = self._get_auto_position(surface_bbox, size, instance)  
+        else:
+            # rotate the surface_bbox
+            surface_bbox = self._rotate_bbox(surface_bbox, instance["rotation"])
+            relative_pos = self._get_auto_position(surface_bbox, instance["size"], instance)  
+            # need to rotate pos and size
+            relative_pos = PolygonConverter.rotate_3D(relative_pos, instance["rotation"])
+            size = self._rotate_size(instance["size"], instance["rotation"])
+
+        size_xz = size[0:3:2]
+        return relative_pos, size_xz
+
+    def get_object_pos(self, receptacle, surface, object, rotation):
+        """
+        Get the position of the object relative to the surface and the absolute position
+        """
+        # find the absolute position of a point relative to a cuboid that has been rotated
+        # get the position of the object relative to the surface
+        # for debug, tell which instance to debug
+        object_to_surface_pos, size_xz = self._get_position(object, receptacle, surface)
+        # get the position of the point relative to the center of the cuboid 
+        surface_to_receptacle_pos = [0,surface["y"],0]
+        object_to_receptacle_pos = [x+y for x, y in zip(object_to_surface_pos, surface_to_receptacle_pos)]
+        if object["category"] in ["door", "window"]:
+            object_to_receptacle_pos[1] = 0
+            
+        # rotate the point using the given angles [angle_x, angle_y, angle_z]
+        if object["category"] in ["door", "window"]:
+            object_to_receptacle_pos = PolygonConverter.rotate_3D(object_to_receptacle_pos, [-rotation[0], rotation[1], rotation[2]])
+        else:
+            object_to_receptacle_pos = PolygonConverter.rotate_3D(object_to_receptacle_pos, rotation)
+        # After applying the rotation, translate the rotated point back to its absolute position 
+        object_position = [m + n for m, n in zip(receptacle["position"], object_to_receptacle_pos)]
+        position_xz = object_to_surface_pos[0:3:2]
+        return position_xz, size_xz, object_position
 
 class LayoutGenerator:
     def __init__(self):
-        self.wall_material = random.choice(WALL_MATERIAL)
+        # self.wall_material = random.choice(WALL_MATERIAL)
+        self.wall_material = "#FFFFFF"
         self.floors = []
         self.walls = []
         self.ceilings = []
@@ -25,8 +108,9 @@ class LayoutGenerator:
             {
                 "position": [center[0], position_y, center[1]],
                 "size": [length, FLOOR_HEIGHT, width],
-                "rotation": [0, 0, 0],
-                "material": random.choice(FLOOR_MATERIAL),
+                "rotation": [0,0,0],
+                # "material": random.choice(FLOOR_MATERIAL),
+                "material": '#FFFFFF',
                 "category": category
             }
         )
@@ -97,44 +181,55 @@ class ObjectGenerator:
         if "surfaces" in receptacle:
             receptacle = self._preprocess_receptacle(receptacle)
             surface = random.choice(receptacle["surfaces"])
-            surface_rect = surface["xz"]
-            rect_placer = RectPlacer(surface_rect)
+            # surface_rect = surface["xz"]
+            # rect_placer = RectPlacer(surface_rect)
             if "children" in surface:
-                for object in surface["children"]:      
-                    # if "prefab" in object and object["prefab"] and "shadow" in object["prefab"]:
-                    #     bbox = PolygonConverter(WALL_WIDTH).get_bbox(object["position"][0:3:2], object["size"][0:3:2])
-                    #     rect_placer.place_rectangle(object["prefab"], bbox)
-                    #     continue
-                  
+                for object in surface["children"]: 
+                    if object["category"] == "bed":
+                        pass 
+                    # add door shadows to floor 
+                    if "prefab" in object and object["prefab"] and "shadow" in object["prefab"]:
+                        position_xz = [x-y for x, y in zip(object["position"][0:3:2], receptacle["position"][0:3:2])]
+                        bbox = PolygonConverter(WALL_WIDTH).get_bbox(position_xz, object["size"][0:3:2])
+                        # rect_placer.place_rectangle(object["prefab"], bbox)
+                        continue
+
+                    # set rotation as the receptacle rotation
+                    if "angle" not in object:
+                        object["rotation"] = receptacle["rotation"]
+                    else:
+                        object["rotation"] = [0, object["angle"], 0]
+
+
                     object = self.instance_generator.get_instance(object)
                     # only objects with size info will be placed
-                    if "size" in object and object["size"]:
-                        # set rotation as the receptacle rotation
-                        if "angle" not in object:
-                            object["rotation"] = receptacle["rotation"]
-                        else:
-                            object["rotation"] = [0, object["angle"], 0]
-
-                        # add scale
-                        object["scale"] = [1, 1, 1]
-                        # get the total rotation of the object
-                        rotation = [x+y for x, y in zip(surface["direction"], object["rotation"])]
+                    if "prefab" in object and object["prefab"] and "size" in object and object["size"]:
+                        # get the total rotation of the surface
+                        rotation = [x+y for x, y in zip(surface["direction"], receptacle["rotation"])]
                         
                         # if surface is not horizontal, the object is not affected by gravity
-                        if surface["direction"] != [0, 20, 0]:
+                        if receptacle["category"] in ["ceiling", "wall"]:
                             object["type"] = "kinematic"
                         
-                        for i in range(10): # try 10 times
-                            # relative position
-                            object["position_xz"], size_xz, object["position"] = get_object_pos(receptacle, surface, object, rotation)
-                            receptacle = self._postprocess_receptacle(receptacle, object, object["position_xz"], size_xz)
+                        # relative position
+                        # check collision, use relative position
+                        object["position_xz"], size_xz, object["position"] = PositionGenerator().get_object_pos(receptacle, surface, object, rotation)
+                        receptacle = self._postprocess_receptacle(receptacle, object, object["position_xz"], size_xz)
+                        
+                        object["bbox"] = PolygonConverter(WALL_WIDTH).get_bbox(object["position_xz"], size_xz)
+                        
+                        # if rect_placer.place_rectangle(object["prefab"], object["bbox"]):
+                        if True:
+                            if object["category"] == "window":
+                                object["scale"] = [1,1,0.2]
+                            self.final_instances.append(object)
+                            print(f"Placed {object['category']} at {object['position_xz']} with bbox {object['bbox']}\n{'#'*30}\n")
+                            self.place_objects_recursively(object)
+                        else:
+                            print(f"Failed to place {object['category']}: {object}\n{'#'*30}\n")
+                    else:
+                        print(f"Failed to place {object['category']}: {object}\n{'#'*30}\n")
 
-                            # check collision, use relative position
-                            object["bbox"] = PolygonConverter(WALL_WIDTH).get_bbox(object["position_xz"], size_xz)
-                            if rect_placer.place_rectangle(object["prefab"], object["bbox"]):
-                                self.final_instances.append(object)
-                                break
-                        self.place_objects_recursively(object)
         return receptacle
 
     def _preprocess_receptacle(self, receptacle):
@@ -148,18 +243,22 @@ class ObjectGenerator:
         return receptacle
     
     def _postprocess_receptacle(self, receptacle, object, position_xz, size_xz):
-        if object["category"] in ["door", "window"]:
+        # if object is door or window, then add holes to wall
+        hole_receptacles = ["door", "window"]
+        if object["category"] in hole_receptacles and receptacle["category"] == "wall":
             receptacle.setdefault("holes", []).append({
                 "position_xy": position_xz,
                 "size_xy": size_xz
             })
         return receptacle
     
+
 class SceneGenerator():
-    def __init__(self, add_ceiling=False):
+    def __init__(self, show_ceiling=False, door_collision=False, use_objaverse=False, use_holodeck=False):
         self.layout_generator = LayoutGenerator()
-        self.object_generator = ObjectGenerator(InstanceGenerator())
-        self.add_ceiling = add_ceiling
+        self.object_generator = ObjectGenerator(InstanceGenerator(use_objaverse=use_objaverse, use_holodeck=use_holodeck))
+        self.show_ceiling = show_ceiling
+        self.door_collision = door_collision
 
     def _place_objects(self, receptacles, shadows=None):
         new_receptacles = []
@@ -172,20 +271,27 @@ class SceneGenerator():
 
     def generate_scene(self, room_plans):
         floors, walls, ceilings = self.layout_generator.generate_layout(room_plans)
-        if self.add_ceiling:
-            floors = floors + ceilings
-        
-        # first place wall objects, then floor objects
+        # first place wall objects
         walls = self._place_objects(walls)
-        # wall_objects = self.object_generator.final_instances
-        # shadows = self._convert_to_shadow(wall_objects)
-        floors = self._place_objects(floors)
+
+        if self.door_collision:
+            wall_objects = self.object_generator.final_instances
+            shadows = self._convert_to_shadow(wall_objects)
+        else:
+            shadows = None
+        floors = self._place_objects(floors, shadows=shadows)
+
+        # then ceiling objects
+        ceilings = self._place_objects(ceilings)
+        # whether to show ceilings
+        if self.show_ceiling:
+            floors = floors + ceilings
         
         final_instances = self.object_generator.final_instances
         scene = {
             'floors': [self.clean_keys(item) for item in floors],
             'walls': [self.clean_keys(item) for item in walls],
-            'instances': [self.clean_keys(obj) for obj in final_instances if obj['category'] not in ['agent', 'player']],
+            'instances': [self.clean_keys(obj) for obj in final_instances if obj['category'] not in ['agent', 'player', 'floor', 'ceiling', 'wall']],
             'agent': next((self.clean_keys(obj) for obj in final_instances if obj['category'] == 'agent'), None),
             'player': next((self.clean_keys(obj) for obj in final_instances if obj['category'] == 'player'), None)
         }
@@ -203,53 +309,42 @@ class SceneGenerator():
         item = {k: item[k] for k in keys if k in item}
         return item
     
-    # def _convert_to_shadow(self, wall_objects, door_shadow_length=0.5):
-    #     """
-    #     Add shadow to the object
-    #     """
-    #     shadow_objects = []
-    #     for obj in wall_objects:
-    #         obj["prefab"] = obj["prefab"]+"-shadow"
-    #         if obj["category"] == "door":
-    #             if obj["rotation"][1] in [0, 180]:
-    #                 # deep copy a dict
-    #                 door_shadow_1 = copy.deepcopy(obj)
-    #                 door_shadow_1["position"][2] = obj["position"][2] + WALL_WIDTH/2 + door_shadow_length/2
-    #                 door_shadow_1["size"][2] = door_shadow_length
-    #                 shadow_objects.append(door_shadow_1)
+    def _convert_to_shadow(self, wall_objects, door_shadow_length=0.5):
+        """
+        Add shadow to the object.
+        """
+        def create_shadow(obj, prefab, dim_index, pos_offset, shadow_length, swap_dims=False):
+            """Helper function to create shadow for door based on orientation and position adjustments."""
+            shadow = copy.deepcopy(obj)
+            shadow["prefab"] = prefab
+            shadow["position"][dim_index] += pos_offset
+            if swap_dims:
+                shadow["size"][0], shadow["size"][2] = shadow["size"][2], shadow_length
+            else:
+                shadow["size"][dim_index] = shadow_length
+            return shadow
 
-    #                 door_shadow_2 = copy.deepcopy(obj)
-    #                 door_shadow_2["position"][2] = obj["position"][2] - WALL_WIDTH/2 - door_shadow_length/2
-    #                 door_shadow_2["size"][2] = door_shadow_length
-    #                 shadow_objects.append(door_shadow_2)
-                    
-    #             else:
-    #                 door_shadow_1 = copy.deepcopy(obj) 
-    #                 door_shadow_1["position"][0] = obj["position"][0] + WALL_WIDTH/2 + door_shadow_length/2
-    #                 size_x = door_shadow_1["size"][0]
-    #                 door_shadow_1["size"][0] = door_shadow_length
-    #                 door_shadow_1["size"][2] = size_x
-    #                 shadow_objects.append(door_shadow_1)
+        shadow_objects = []
+        for obj in wall_objects:
+            if obj["category"] == "door":
+                prefab = obj["prefab"] + "-shadow"
+                shadow_length = door_shadow_length
+                axis, pos_factor = (2, 1) if obj["rotation"][1] in [0, 180] else (0, 0)
+                offsets = [WALL_WIDTH/2 + shadow_length/2, -WALL_WIDTH/2 - shadow_length/2]
+                shadows = [create_shadow(obj, prefab, axis, offset, shadow_length, pos_factor == 0) for offset in offsets]
+                shadow_objects.extend(shadows)
+        print([self.clean_keys(obj) for obj in shadow_objects])
+        return [self.clean_keys(obj) for obj in shadow_objects]
 
-    #                 door_shadow_2 = copy.deepcopy(obj)
-    #                 door_shadow_2["position"][0] = obj["position"][0] - WALL_WIDTH/2 - door_shadow_length/2
-    #                 size_x = door_shadow_2["size"][0]
-    #                 door_shadow_2["size"][0] = door_shadow_length
-    #                 door_shadow_2["size"][2] = size_x
-    #                 shadow_objects.append(door_shadow_2)
-    #     shadow_objects = [self.clean_keys(obj) for obj in shadow_objects]
-    #     return shadow_objects
 
-        
 if __name__ == "__main__":
     scene_folder = f"{os.getcwd()}/legent/scenes"
     room_plans = load_json(f"{scene_folder}/metascene.json")
     # scene = SceneGenerator().generate_scene(room_plans)
 
     # # take a photo of the scene
-    # take_photo(SceneGenerator(add_ceiling=False).generate_scene, room_plans, scene_folder)
-
-    # play with the scene
-    play_with_scene(f"{scene_folder}/scene.json", SceneGenerator().generate_scene, room_plans, scene_folder)
-
-   
+    # take_photo(SceneGenerator(show_ceiling=True, door_collision=True, use_holodeck=True).generate_scene, room_plans, scene_folder, camera_field_of_view=120, camera_width=2048)
+    take_photo(SceneGenerator(show_ceiling=False, door_collision=True, use_holodeck=True).generate_scene, room_plans, scene_folder, photo_type="topdown")
+    # # play with the scene
+    # scene = load_json("legent/scenes/metascene.json")
+    # play_with_scene(f"{scene_folder}/scene.json", SceneGenerator(show_ceiling=False, door_collision=True, use_holodeck=True).generate_scene, scene, scene_folder)
