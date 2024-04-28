@@ -1,0 +1,44 @@
+[
+    {
+        "center":"table",
+        "member":"chair",
+        "receptacle":"floor",
+        "max_edges":4,
+        "padding":0
+    },
+    {
+        "center":"dining table",
+        "member":"chair",
+        "receptacle":"floor",
+        "max_edges":4,
+        "padding":0
+    },
+    {
+        "center":"coffee table",
+        "member":"stool",
+        "receptacle":"floor",
+        "max_edges":4,
+        "padding":0
+    },
+    {
+        "center":"desk",
+        "member":"chair",
+        "receptacle":"floor",
+        "max_edges":1,
+        "padding":0
+    },
+    {
+        "center":"bed",
+        "member":"bedtable",
+        "receptacle":"floor",
+        "max_edges":2,
+        "padding":0
+    },
+    {
+        "center":"side table",
+        "member":"sofa",
+        "receptacle":"floor",
+        "max_edges":4,
+        "padding":0
+    }
+]
