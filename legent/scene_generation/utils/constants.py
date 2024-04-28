@@ -41,6 +41,20 @@ WALL_MATERIAL = [
 # MIDDLE_PREFABS = load_json("data/middle_prefabs.json")
 
 
+INCLUDED_CATEGORIES  = ['cup', 'chair', 'table', 'shelves', 'toy', 'key', 'mug', 'laptop', 'poster', 
+                        'plant', 'bowl', 'bottle', 'shelf', 'coat hanger', 'pot', 'cushion', 'vase', 
+                        'teddy bear', 'radio', 'frame', 'bed', 'shoe', 'television set', 'desk', 'lamp', 
+                        'coffee table', 'pan (for cooking)', 'pitcher', 'armchair', 'bag', 'pan', 'ottoman', 
+                        'candle', 'couch', 'sofa', 'window', 'book', 'computer', 'clock', 'hardback book', 'bookcase', 
+                        'refrigerator', 'water jug', 'stool', 'toaster oven', 'camera', 'cellular telephone', 'phone', 
+                        'table lamp', 'dining table', 'sink', 'microwave', 'cabinet', 'jug', 'trash can', 'basket', 
+                        'telephone', 'painting', 'wall clock', 'towel rack', 'monitor (computer equipment)', 
+                        'picture', 'toaster', 'water bottle', 'scissors', 'apple', 'desk lamp', 'couch', 'bed', 
+                        'drawer', 'oven', 'refrigerator', 'washing machine', 'television', 'computer', 'telephone', 
+                        'shower', 'toilet', 'mirror', 'lamp', 'bookshelf', 'couch', 'rug', 'window', 'door', 'pillow', 
+                        'blanket', 'cabinet', 'wardrobe', 'dresser', 'wall art', 'curtains', 'light']
+
+
 
 def get_edge_middle_prefabs():
     asset_dict = load_json("data/addressables.json")
@@ -138,16 +152,6 @@ def process_assets(original_path, save_path):
 
     store_json(save_assets, save_path)
 
-def object_category_to_names(asset_path, types_to_names_path):
-    object_dict = {}
-    for asset in load_json(asset_path):
-        object_type = asset["category"]
-        object_name = asset["uid"]
-        if object_type in object_dict:
-            object_dict[object_type].append(object_name)
-        else:
-            object_dict[object_type] = [object_name]
-    store_json(object_dict, types_to_names_path)
 
 
 def object_category_to_names_normal(all_assets, types_to_names_path):
@@ -162,24 +166,52 @@ def object_category_to_names_normal(all_assets, types_to_names_path):
     store_json(object_dict, types_to_names_path)
 
 
-if __name__ == "__main__":
-    print("here")
-    # process assets
-    # asset_path = "legent/scene_generation/data/addressables.json"
-    # types_to_names_path = "legent/scene_generation/data/object_type_to_names.json"
-    # all_assets = load_json(asset_path)["prefabs"]
-    
-    # object_category_to_names_normal(all_assets, types_to_names_path)
-    # type_to_names = load_json(types_to_names_path)
+def get_prefab_to_asset_json():
+    """
+    in the form of prefab:{asset}
+    """
+    asset_list = load_json("legent/scene_generation/backup_data/objaverse_addresables.json")
+    save_path = f"legent/scene_generation/data/prefab_to_asset.json"
+    final_dict = {}
+    for item in asset_list:
+        final_dict[item["name"]] = item
+    store_json(final_dict, save_path)
 
-    # final_dict = {}
-    # for type, names in type_to_names.items():
-    #     for name in names:
-    #         for prefab in all_assets:
-    #             if prefab['name'] == name:
-    #                 if type not in final_dict:
-    #                     final_dict[type] = []
-    #                 final_dict[type].append(prefab)
+
+def get_object_type_to_instances_json():
+    """
+    in the form of category:[assets]
+    """
+    asset_path = "legent/scene_generation/backup_data/objaverse_addresables.json"
+    types_to_instances_path = "legent/scene_generation/data/object_type_to_instances.json"
+    types_to_instances = {}
+    for asset in load_json(asset_path):
+        object_size = asset["size"]
+        object_type = asset["category"]
+        if object_type in INCLUDED_CATEGORIES and object_size["x"] <2.3 and object_size["y"] < 2.3 and object_size["z"] < 2.3:
+            if object_type == "picture":
+                if object_size["z"] > 0.05:
+                    continue
+            if object_type == "door":
+                if object_size["y"] < 2:
+                    continue
+                if object_size["x"] < 0.5 or object_size["x"] > 1.3:
+                    continue
+                if object_size["z"] > 0.3:
+                    continue
+            if object_type == "light":
+                if object_size["y"] > 0.5:
+                    continue
+            if object_type in types_to_instances:
+                types_to_instances[object_type].append(asset)
+            else:
+                types_to_instances[object_type] = [asset]
+    store_json(types_to_instances, types_to_instances_path)
+
+
+if __name__ == "__main__":
+    # get_prefab_to_asset_json()
+    get_object_type_to_instances_json()
     
     # final_dict.update({
     #     "agent":[
@@ -205,54 +237,4 @@ if __name__ == "__main__":
     # })
     # store_json(final_dict, "legent/scene_generation/data/prefabs.json")
 
-    # process objaverse assets
-    # original_path = "/Users/a0001/THUNLP/embodied_ai/Holodeck-main/data/objaverse_holodeck/09_23_combine_scale/objaverse_holodeck_database.json"
-    # save_path = "/Users/a0001/THUNLP/legent_new/LEGENT/legent/scene_generation/data/objaverse_addresables.json"
-    # process_assets(original_path, save_path)
-
-    # asset_path = "legent/scene_generation/data/objaverse_addresables.json"
-    # # process_assets(original_path, asset_path)
-    # types_to_names_path = "legent/scene_generation/data/objaverse_object_type_to_names.json"
-    # object_category_to_names(asset_path, types_to_names_path)
-
-    # # included_categories  = ["bed"]
-    
-   
-
-
-    # input_path = "/Users/a0001/THUNLP/legent_new/LEGENT/legent/scene_generation/data/objaverse_object_type_to_names.json"
-    # output_path = "/Users/a0001/THUNLP/legent_new/LEGENT/legent/scene_generation/data/filtered_objaverse_object_type_to_names.json"
-
-    # included_categories  = ['cup', 'chair', 'table', 'shelves', 'toy', 'key', 'mug', 'laptop', 'poster', 'plant', 'bowl', 'bottle', 'shelf', 'coat hanger', 'pot', 'cushion', 'vase', 'teddy bear', 'radio', 'frame', 'bed', 'shoe', 'television set', 'desk', 'lamp', 'coffee table', 'pan (for cooking)', 'pitcher', 'armchair', 'bag', 'pan', 'ottoman', 'candle', 'couch', 'sofa', 'window', 'book', 'computer', 'clock', 'hardback book', 'bookcase', 'refrigerator', 'water jug', 'stool', 'toaster oven', 'camera', 'cellular telephone', 'phone', 'table lamp', 'dining table', 'sink', 'microwave', 'cabinet', 'jug', 'trash can', 'basket', 'telephone', 'painting', 'wall clock', 'towel rack', 'monitor (computer equipment)', 'picture', 'toaster', 'water bottle', 'scissors', 'apple', 'desk lamp', 'couch', 'bed', 'drawer', 'oven', 'refrigerator', 'washing machine', 'television', 'computer', 'telephone', 'shower', 'toilet', 'mirror', 'lamp', 'bookshelf', 'couch', 'rug', 'window', 'door', 'pillow', 'blanket', 'cabinet', 'wardrobe', 'dresser', 'wall art', 'curtains']
-
-    # data = load_json(input_path)
-    # final_data = {key: data[key] for key in included_categories if key in data}
-    # filter size too
-    # size[0], size[1], size[2]
-    # store_json(final_data, output_path)
-    
-    
-    
-
-    # objaverse_addressables = load_json("/Users/a0001/THUNLP/legent_new/LEGENT/legent/scene_generation/data/objaverse_addresables.json")
-    # final_dict = {}
-    # for type, names in object_type_to_names.items():
-    #     # if type in included_categories:
-    #     for name in names:
-    #         for prefab in objaverse_addressables:
-    #             if prefab['name'] == name:
-    #                 if type not in final_dict:
-    #                     final_dict[type] = []
-    #                 final_dict[type].append(prefab)
-    
-    # store_json(final_dict, "legent/scene_generation/data/objaverse_prefabs.json")
-
-
-    # object_type_to_names = load_json("/Users/a0001/THUNLP/legent_new/LEGENT/legent/scene_generation/data/filtered_objaverse_object_type_to_names.json")
-    # list_of_objects = list(object_type_to_names.values())
-    # objaverse_addressables = load_json("/Users/a0001/THUNLP/legent_new/LEGENT/legent/scene_generation/data/objaverse_addresables.json")
-    # for prefab in objaverse_addressables:
-    #     print(prefab['name'])
-    #     # if prefab['name'] in list_of_objects:
-    #     #     print(prefab)
                    

@@ -1,31 +1,21 @@
-from legent import Environment, ResetInfo, generate_scene, TakePhotoWithVisiblityInfo, store_json
+from legent import Environment, ResetInfo, load_json,generate_scene, TakePhotoWithVisiblityInfo, store_json
 import os
 
 
-save_folder = f"{os.getcwd()}/photo_views"
-os.makedirs(save_folder, exist_ok=True)
+scene_folder = f"{os.getcwd()}/legent/scenes"
+os.makedirs(scene_folder, exist_ok=True)
 
 env = Environment(env_path="auto", camera_resolution=1024, camera_field_of_view=120)
 
 try:
-    for i in range(10):
-        absolute_path = f"{save_folder}/{i:04d}.png"
+    for i in range(1):
+        absolute_path = f"{scene_folder}/{i:04d}.png"
         print(f"save photo of scene {i} to {absolute_path}")
-        scene = generate_scene(room_num=1)
-        position = scene["agent"]["position"].copy()
+        scene = load_json(f"{scene_folder}/scene.json")
+        position = scene["player"]["position"].copy()
         position[1] += 1
-        rotation = scene["agent"]["rotation"]
+        rotation = scene["player"]["rotation"]
         obs = env.reset(ResetInfo(scene, api_calls=[TakePhotoWithVisiblityInfo(absolute_path, position, rotation, width=4096, height=4096, vertical_field_of_view=90)]))
 
-        visible_objects = [scene["instances"][object_id]["prefab"] for object_id in obs.api_returns["objects_in_view"]]
-        print(obs.api_returns)
-        print(visible_objects)
-        store_json(visible_objects, f"{save_folder}/{i:04d}.json")
-
-        # If you want to interact with the scene, uncomment the following codes.
-        # while True:
-        #     if obs.text == "#RESET":
-        #         break
-        #     obs = env.step()
 finally:
     env.close()

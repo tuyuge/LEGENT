@@ -6,57 +6,50 @@ import objaverse
 import numpy as np
 from shapely.geometry import Polygon
 from shapely.affinity import rotate
-from legent import load_json, store_json, Environment, ResetInfo, SaveTopDownView, Observation, TakePhotoWithVisiblityInfo
+from legent import load_json, Environment, ResetInfo, SaveTopDownView, Observation, TakePhotoWithVisiblityInfo
 import trimesh
 from legent.utils.config import ENV_FOLDER
 objaverse._VERSIONED_PATH = f"{ENV_FOLDER}/objaverse"
 from legent.scene_generation.utils.mesh_processer import convert_holodeck_asset_to_gltf
 import os
+from legent.utils.math import look_rotation
+import copy
+
 
 ######## legent related ########
-def take_photo(generator, room_plans, folder, camera_width=4096, camera_field_of_view=120, vertical_field_of_view=90, photo_type="corner_view"):
+def take_photo(scene, folder, camera_width=4096, camera_field_of_view=120, vertical_field_of_view=90, photo_type="player_view"):
     """
     Take a photo of the scene and save it to the abosulte path!
     """
     env = Environment(env_path="auto", camera_resolution=1024, camera_field_of_view=camera_field_of_view)
     camera_height = int(camera_width / camera_field_of_view * vertical_field_of_view)
     try:
-        scene = generator(room_plans)
-        store_json(scene, f"{folder}/scene.json")
-        photo_path = f"{folder}/photo.png"
         if photo_type == "topdown":
+            photo_path = f"{folder}/topdown.png"
             obs = env.reset(ResetInfo(scene, api_calls=[SaveTopDownView(absolute_path=photo_path)]))
-        elif photo_type == "corner_view":
+        elif photo_type == "player_view":
+            photo_path = f"{folder}/player_view.png"
             position = scene["player"]["position"].copy()
-            # 人眼距离地面的高度
-            position[1] = 1.5
-            # 最好和实际数据分布尽可能一致，所以正着的要多一些
-            # 相机的角度范围一般是多少？这个角度范围还要根据具体位置计算下，计算方法是如果在外放块就往对角线看的，偏移一点原来的位置；如果在内方块就随机一个yrotation
-            rotation_chage_prob = 0
-            rotation_y = scene["player"]["rotation"][1]
-            if random.random() < rotation_chage_prob:
-                rotation = [0, rotation_y+random.uniform(30, -30),0]
-            else:
-                rotation = [random.uniform(0, 90), rotation_y, 0]
-            # move player away
-            scene["player"]["position"] = [100, 0.1, 100]
+             # player look at the center
+            vs, vt = np.array([position[0],0, position[2]]), np.array([0, 0, 0])
+            vr = look_rotation(vt - vs)
+            offset = random.uniform(-30, 30)
+            rotation = [0, vr[1]+offset, 0]
+            position[1] = 1
+            scene["player"]["position"] = [50, 0.1, 50]
             obs = env.reset(ResetInfo(scene, api_calls=[TakePhotoWithVisiblityInfo(photo_path, position, rotation, width=camera_width, height=camera_height, vertical_field_of_view=vertical_field_of_view)]))
         print("Scene saved successfully: ", photo_path)
     finally:
         env.close()
 
-def play_with_scene(scene_path, generator, room_plans, scene_folder):
+def play_with_scene(scene):
     """
     Play with the scene
     """
     env = Environment(env_path="auto", camera_resolution=1024, camera_field_of_view=120)
     try:
-        obs: Observation = env.reset(ResetInfo(scene=load_json(scene_path)))
+        obs: Observation = env.reset(ResetInfo(scene=scene))
         while True:
-            if obs.text == "#RESET":
-                scene = generator(room_plans)
-                env.reset(ResetInfo(scene))
-                store_json(scene, f"{scene_folder}/scene.json")
             obs = env.step()
     finally:
         env.close()
@@ -75,7 +68,6 @@ def complete_scene(predefined_scene):
     #     center = [(x_min + x_max) / 2, (z_min + z_max) / 2]
     #     return [center[0], (x_max-x_min+z_max-z_min), center[1]]
 
-
     position = [100, 0.1, 100] 
     rotation = [0, random.randint(0, 360), 0]
     agent = {
@@ -86,15 +78,21 @@ def complete_scene(predefined_scene):
         "parent": -1,
         "type": ""
     }
+
+    # center of one room
     bbox = predefined_scene["floors"][0]["bbox"]
     x_min, z_min, x_max, z_max = bbox
     center = [(x_min + x_max) / 2,(x_max-x_min+z_max-z_min), (z_min + z_max) / 2]
 
-    position = [bbox[0]+0.3, 0.1, bbox[1]+0.3]
+
+     # if the player can not be placed, then place it at the door
+    door_position = next(instance for instance in predefined_scene["instances"] if instance["category"]=="door")["position"]
+    player_position = copy.deepcopy(door_position)
+    player_position = [player_position[0], 0.1, player_position[2]+0.3]
     rotation = [0, 45, 0]
     player = {
         "prefab": "",
-        "position": position,
+        "position": player_position,
         "rotation": rotation,
         "scale": [1, 1, 1],
         "parent": -1,
@@ -241,76 +239,55 @@ class InstanceGenerator:
         self.use_objaverse = use_objaverse
         self.use_holodeck = use_holodeck
         self.holodeck_data_path = "/Users/a0001/THUNLP/embodied_ai/Holodeck-main/data/objaverse_holodeck/09_23_combine_scale/processed_2023_09_23_combine_scale"
-        self.objaverse_assets = load_json("legent/scene_generation/data/objaverse_prefabs.json")
-        self.other_assets = load_json("legent/scene_generation/data/prefabs.json")
+        self.prefab_to_asset = load_json("legent/scene_generation/data/prefab_to_asset.json")
+        self.object_types_to_instances = load_json("legent/scene_generation/data/object_type_to_instances.json")
 
     def get_instance(self, instance):
-        prefab = instance["prefab"] if "prefab" in instance else None
-        if "category" not in instance:
-            category = self.get_category(instance["prefab"])
-            instance["category"] = category
+        """
+        Get the instance given the prefab or category, add scale and reset size
+        """
+        # get the asset
+        if "prefab" not in instance:
+            asset = random.choice(self.object_types_to_instances[instance["category"]])
         else:
-            category = instance["category"]
-        """
-        Get the instance given the category or prefab
-        """
-
+            asset = self.prefab_to_asset[instance["prefab"]]
+        
         try:
-            if self.use_objaverse or self.use_holodeck:
-                if instance["category"] in ["door", "window"]:
-                    assets = self.other_assets
-                else:
-                    assets = self.objaverse_assets
-            else:
-                assets = self.other_assets
-            if prefab:
-                asset = next(item for item in assets[category] if item['name'] == prefab)
-            else:
-                asset = random.choice(assets[category])
-            asset["prefab"] = self._set_prefab(asset['name'], instance["category"])
-            if not asset["prefab"]:
-                return asset
-
-            try:
-                asset['size'] = [asset['size'][dim] for dim in ('x', 'y', 'z')]
-            except:
-                pass
-            
-            instance.update(asset)
-           
-        except (KeyError, StopIteration):
+            asset['size'] = [asset['size'][dim] for dim in ('x', 'y', 'z')]
+        except:
             pass
 
+        asset["prefab"] = self._reset_prefab(asset["name"])
+        if asset["type"] is None:
+            asset["type"] = "kinematic"
+        
+        instance.update(asset)
+           
         try:
             instance["scale"] = self._get_scale(instance["prefab"], instance["size"])
         except:
             instance["scale"] = [1,1,1]
 
-        if self.use_objaverse:
-            instance["rotation"] = [-i for i in instance["rotation"]]
         return instance        
 
-    def _set_prefab(self, instance_name, category):
+    def _reset_prefab(self, prefab):
         """
         Set prefab attribute for the instance
         """
-        if instance_name not in ["agent", "player"]:
-            if self.use_objaverse:
-                if category in ["door", "window"]:
-                    prefab = instance_name
-                else:
-                    prefab = self._objaverse_object(instance_name)
-            elif self.use_holodeck:
-                if category in ["door", "window"]:
-                    prefab = instance_name
-                else:
-                    prefab = self._holodeck_object(instance_name)
-            else:
-                prefab = instance_name
-            return prefab
+        if self.use_objaverse:
+            try:
+                prefab = self._objaverse_object(prefab)
+            except:
+                prefab = prefab
+        elif self.use_holodeck:
+            try:
+                prefab = self._holodeck_object(prefab)
+            except:
+                prefab = prefab
+        return prefab
     
     @staticmethod
-    def get_category(prefab):
+    def prefab_to_category(prefab):
         """
         Get the category according to prefab
         """
